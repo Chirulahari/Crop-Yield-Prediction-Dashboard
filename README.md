@@ -9,15 +9,6 @@ An end-to-end **Machine Learning + Interactive Dashboard Application** that pred
 The system uses **Quantile LightGBM models** for probabilistic prediction and provides **real-time insights, uncertainty estimation, and SHAP-based explainability** through an interactive **Streamlit dashboard**.
 
 ---
-
-## 📌 Table of Contents
-- [Overview](#📖 Overview)  
-- [Motivation](#💡 Motivation)  
-- [Project Structure](#📂 Project Structure)  
-- [Technologies Used](#🛠 Technologies Used)  
-- [Features](#🚀 Features)  
-- [Installation](#⚙️ Installation)
-
 ---
 
 ## 📖 Overview
