@@ -8,8 +8,6 @@ An end-to-end **Machine Learning + Interactive Dashboard Application** that pred
 
 The system uses **Quantile LightGBM models** for probabilistic prediction and provides **real-time insights, uncertainty estimation, and SHAP-based explainability** through an interactive **Streamlit dashboard**.
 
----
----
 
 ## 📖 Overview
 This project provides a **data-driven solution for crop yield prediction** using machine learning techniques.
