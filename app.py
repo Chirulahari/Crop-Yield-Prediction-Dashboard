@@ -15,7 +15,7 @@ from properscoring import crps_ensemble
 # PAGE CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("🌾 FULL INTEGRATED LIVE DASHBOARD (ALL IN ONE)")
+st.title("🌾 FULL INTEGRATED LIVE DASHBOARD")
 
 # =========================
 # FILE UPLOAD
@@ -121,7 +121,7 @@ if uploaded_file:
             )
 
     # =========================
-    # FIX FEATURE MISMATCH
+    # FIXED INPUT (IMPORTANT)
     # =========================
     input_full = {}
 
@@ -129,7 +129,7 @@ if uploaded_file:
         if col in input_data:
             input_full[col] = input_data[col]
         else:
-            input_full[col] = 0  # for dummy variables
+            input_full[col] = X[col].mean()   # ✅ FIX
 
     input_df = pd.DataFrame([input_full])
     input_df = input_df[X.columns]
@@ -150,21 +150,30 @@ if uploaded_file:
     # =========================
     st.subheader("📊 All Visuals")
 
-    fig1 = px.scatter(x=y_med, y=y_test,
-                      labels={'x': 'Predicted', 'y': 'Observed'},
-                      title="Actual vs Predicted")
+    fig1 = px.scatter(
+        x=y_med, y=y_test,
+        labels={'x': 'Predicted', 'y': 'Observed'},
+        title="Actual vs Predicted"
+    )
     st.plotly_chart(fig1, use_container_width=True)
 
-    fig2 = px.bar(x=["PICP", "Width"], y=[picp, sharpness],
-                  title="Coverage vs Interval Width")
+    fig2 = px.bar(
+        x=["PICP", "Width"],
+        y=[picp, sharpness],
+        title="Coverage vs Interval Width"
+    )
     st.plotly_chart(fig2, use_container_width=True)
 
     residuals = y_test - y_med
-    fig3 = px.histogram(residuals, nbins=30,
-                        title="Residual Distribution")
+
+    fig3 = px.histogram(
+        residuals, nbins=30,
+        title="Residual Distribution"
+    )
     st.plotly_chart(fig3, use_container_width=True)
 
     x_vals = np.linspace(min(residuals), max(residuals), 100)
+
     fig4 = px.line(
         x=x_vals,
         y=gev.pdf(x_vals, *gev.fit(residuals)),
@@ -173,13 +182,18 @@ if uploaded_file:
     st.plotly_chart(fig4, use_container_width=True)
 
     # =========================
-    # SHAP EXPLANATION
+    # SHAP (FIXED)
     # =========================
     st.subheader("🔍 SHAP Explanation")
 
-    explainer = shap.Explainer(models[0.5])
-    shap_values = explainer(input_df)
+    explainer = shap.TreeExplainer(models[0.5])  # ✅ FIX
+    shap_values = explainer.shap_values(input_df)
 
-    shap.plots.waterfall(shap_values[0], show=False)
+    shap.plots._waterfall.waterfall_legacy(
+        explainer.expected_value,
+        shap_values[0],
+        feature_names=input_df.columns
+    )
+
     st.pyplot(plt.gcf())
     plt.clf()
