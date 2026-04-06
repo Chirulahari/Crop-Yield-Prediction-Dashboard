@@ -15,7 +15,7 @@ from properscoring import crps_ensemble
 # PAGE CONFIG
 # =========================
 st.set_page_config(layout="wide")
-st.title("🌾 FULL INTEGRATED LIVE DASHBOARD")
+st.title("🌾 ADVANCED CROP YIELD PREDICTION DASHBOARD")
 
 # =========================
 # FILE UPLOAD
@@ -44,6 +44,9 @@ if uploaded_file:
     for c in cat_cols:
         df[c] = df[c].fillna(df[c].mode()[0])
 
+    # Store the categories BEFORE one-hot encoding so we can use them for input building
+    cat_categories = {c: sorted(df[c].unique().tolist()) for c in cat_cols}
+
     df = pd.get_dummies(df, columns=cat_cols, drop_first=True)
 
     X = df.drop(columns=['Crop_Yield_MT_per_HA'])
@@ -54,26 +57,29 @@ if uploaded_file:
     )
 
     # =========================
-    # TRAIN MODEL
+    # TRAIN MODEL (cached so sidebar changes don't retrain)
     # =========================
-    st.info("Training models...")
+    @st.cache_resource
+    def train_models(_X_train, _y_train):
+        quantiles = [0.1, 0.5, 0.9]
+        models = {}
+        for q in quantiles:
+            model = lgb.LGBMRegressor(
+                objective='quantile',
+                alpha=q,
+                n_estimators=400,
+                learning_rate=0.05
+            )
+            model.fit(_X_train, _y_train)
+            models[q] = model
+        return models
 
-    quantiles = [0.1, 0.5, 0.9]
-    models, preds = {}, {}
-
-    for q in quantiles:
-        model = lgb.LGBMRegressor(
-            objective='quantile',
-            alpha=q,
-            n_estimators=300
-        )
-        model.fit(X_train, y_train)
-        preds[q] = model.predict(X_test)
-        models[q] = model
-
-    y_lo, y_med, y_hi = preds[0.1], preds[0.5], preds[0.9]
-
+    with st.spinner("Training models..."):
+        models = train_models(X_train, y_train)
     st.success("Models Trained Successfully!")
+
+    preds = {q: models[q].predict(X_test) for q in [0.1, 0.5, 0.9]}
+    y_lo, y_med, y_hi = preds[0.1], preds[0.5], preds[0.9]
 
     # =========================
     # METRICS
@@ -82,22 +88,22 @@ if uploaded_file:
     r2 = r2_score(y_test, y_med)
     picp = np.mean((y_test >= y_lo) & (y_test <= y_hi))
     sharpness = np.mean(y_hi - y_lo)
-    crps_score = np.mean(
-        crps_ensemble(y_test.values, np.vstack([y_lo, y_med, y_hi]).T)
-    )
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("RMSE", round(rmse, 3))
-    col2.metric("R²", round(r2, 3))
+    col2.metric("R² Score", round(r2, 3))
     col3.metric("Coverage %", round(picp * 100, 2))
     col4.metric("Interval Width", round(sharpness, 3))
 
     # =========================
     # SIDEBAR INPUTS
     # =========================
-    st.sidebar.header("🌱 Interactive Input Controls")
+    st.sidebar.header("🌱 Input Controls")
 
-    important_features = [
+    input_data = {}
+
+    # ---------- NUMERICAL ----------
+    numeric_inputs = [
         'Year',
         'Average_Temperature_C',
         'Total_Precipitation_mm',
@@ -105,31 +111,59 @@ if uploaded_file:
         'Extreme_Weather_Events',
         'Irrigation_Access_%',
         'Pesticide_Use_KG_per_HA',
-        'Fertilizer_Use_KG_per_HA'
+        'Fertilizer_Use_KG_per_HA',
+        'Soil_Health_Index',
+        'Economic_Impact_Million_USD',
     ]
 
-    input_data = {}
-
-    for col in important_features:
+    for col in numeric_inputs:
         if col in df_original.columns:
-            val = float(df_original[col].mean())
             input_data[col] = st.sidebar.slider(
                 col,
                 float(df_original[col].min()),
                 float(df_original[col].max()),
-                val
+                float(df_original[col].mean())
             )
 
+    # ---------- CATEGORICAL ----------
+    # Store selected value per category column
+    cat_selected = {}   # e.g. {'Crop_Type': 'Rice', 'Region': 'West Bengal', ...}
+
+    for col in cat_cols:
+        options = cat_categories[col]
+        cat_selected[col] = st.sidebar.selectbox(col, options)
+
     # =========================
-    # FIXED INPUT (IMPORTANT)
+    # CREATE FULL INPUT — FIX IS HERE
     # =========================
+    # Start with zeros for all one-hot columns, median for numeric
     input_full = {}
 
     for col in X.columns:
-        if col in input_data:
-            input_full[col] = input_data[col]
+        # Identify if this column is a one-hot dummy (contains an underscore that
+        # matches one of the original categorical columns)
+        is_dummy = any(col.startswith(f"{c}_") for c in cat_cols)
+        input_full[col] = 0.0 if is_dummy else float(X[col].median())
+
+    # Override numeric inputs from sliders
+    for k, v in input_data.items():
+        if k in input_full:
+            input_full[k] = v
+
+    # Override categorical dummies correctly:
+    # For each categorical column, set the correct dummy to 1 (and leave all others 0)
+    # Note: drop_first=True drops the first (alphabetically sorted) category per column.
+    for col, selected_val in cat_selected.items():
+        sorted_cats = cat_categories[col]   # same sort order pandas used
+        dropped_cat = sorted_cats[0]        # drop_first drops the first sorted category
+
+        if selected_val == dropped_cat:
+            # This is the reference category — all dummies for this column stay 0
+            pass
         else:
-            input_full[col] = X[col].mean()   # ✅ FIX
+            dummy_col = f"{col}_{selected_val}"
+            if dummy_col in input_full:
+                input_full[dummy_col] = 1.0
 
     input_df = pd.DataFrame([input_full])
     input_df = input_df[X.columns]
@@ -142,51 +176,38 @@ if uploaded_file:
     hi = models[0.9].predict(input_df)[0]
 
     st.subheader("📈 Real-Time Yield Prediction")
-    st.write(f"### 🌾 {round(pred,2)} MT/ha")
-    st.write(f"Uncertainty Range: {round(lo,2)} — {round(hi,2)}")
+    st.write(f"### 🌾 {round(pred, 2)} MT/ha")
+    st.write(f"Range: {round(lo, 2)} — {round(hi, 2)}")
 
     # =========================
     # VISUALS
     # =========================
-    st.subheader("📊 All Visuals")
+    st.subheader("📊 Visualizations")
 
-    fig1 = px.scatter(
-        x=y_med, y=y_test,
-        labels={'x': 'Predicted', 'y': 'Observed'},
-        title="Actual vs Predicted"
-    )
+    fig1 = px.scatter(x=y_med, y=y_test, title="Actual vs Predicted",
+                      labels={"x": "Predicted", "y": "Actual"})
     st.plotly_chart(fig1, use_container_width=True)
-
-    fig2 = px.bar(
-        x=["PICP", "Width"],
-        y=[picp, sharpness],
-        title="Coverage vs Interval Width"
-    )
-    st.plotly_chart(fig2, use_container_width=True)
 
     residuals = y_test - y_med
 
-    fig3 = px.histogram(
-        residuals, nbins=30,
-        title="Residual Distribution"
-    )
-    st.plotly_chart(fig3, use_container_width=True)
+    fig2 = px.histogram(residuals, title="Residual Distribution")
+    st.plotly_chart(fig2, use_container_width=True)
 
     x_vals = np.linspace(min(residuals), max(residuals), 100)
 
-    fig4 = px.line(
+    fig3 = px.line(
         x=x_vals,
         y=gev.pdf(x_vals, *gev.fit(residuals)),
-        title="GEV Tail Fit"
+        title="GEV Tail Risk"
     )
-    st.plotly_chart(fig4, use_container_width=True)
+    st.plotly_chart(fig3, use_container_width=True)
 
     # =========================
-    # SHAP (FIXED)
+    # SHAP
     # =========================
     st.subheader("🔍 SHAP Explanation")
 
-    explainer = shap.TreeExplainer(models[0.5])  # ✅ FIX
+    explainer = shap.TreeExplainer(models[0.5])
     shap_values = explainer.shap_values(input_df)
 
     shap.plots._waterfall.waterfall_legacy(
